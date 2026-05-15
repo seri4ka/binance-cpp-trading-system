@@ -1,0 +1,48 @@
+# Build artifacts
+build/
+cmake-build-*/
+out/
+
+# Visual Studio / MSVC
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.vcxproj.user
+
+# VS Code / JetBrains
+.vscode/
+.idea/
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
+
+# Runtime logs and generated data
+*.log
+*.csv
+*.db
+data/
+logs/
+
+# Environment / secrets
+.env
+.env.*
+*.pem
+
+# Binaries
+*.exe
+*.dll
+*.lib
+*.pdb
+*.ilk
+*.obj
+*.exp
+
+# OS files
+.DS_Store
+Thumbs.db
