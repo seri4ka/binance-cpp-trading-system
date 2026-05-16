@@ -12,9 +12,12 @@
 
 #include <cstdlib>
 #include <exception>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <string>
+#include <vector>
 
 namespace beast = boost::beast;
 namespace websocket = beast::websocket;
@@ -23,6 +26,85 @@ namespace ssl = net::ssl;
 
 using tcp = net::ip::tcp;
 using json = nlohmann::json;
+
+struct AppConfig {
+    std::string host = "stream.binance.com";
+    std::string port = "9443";
+    std::string symbol = "btcusdt";
+    std::vector<std::string> streams = { "bookTicker", "trade" };
+    std::string cert_file = "cacert.pem";
+
+    [[nodiscard]] std::string build_target() const {
+        std::ostringstream oss;
+
+        oss << "/stream?streams=";
+
+        for (std::size_t i = 0; i < streams.size(); ++i) {
+            if (i > 0) {
+                oss << '/';
+            }
+
+            oss << symbol << '@' << streams[i];
+        }
+
+        return oss.str();
+    }
+
+    static AppConfig load_from_file(const std::string& path) {
+        std::ifstream file(path);
+
+        if (!file.is_open()) {
+            throw std::runtime_error("Failed to open config file: " + path);
+        }
+
+        json root;
+        file >> root;
+
+        AppConfig config;
+
+        if (root.contains("host")) {
+            config.host = root.at("host").get<std::string>();
+        }
+
+        if (root.contains("port")) {
+            config.port = root.at("port").get<std::string>();
+        }
+
+        if (root.contains("symbol")) {
+            config.symbol = root.at("symbol").get<std::string>();
+        }
+
+        if (root.contains("streams")) {
+            config.streams = root.at("streams").get<std::vector<std::string>>();
+        }
+
+        if (root.contains("cert_file")) {
+            config.cert_file = root.at("cert_file").get<std::string>();
+        }
+
+        if (config.host.empty()) {
+            throw std::runtime_error("Config error: host is empty");
+        }
+
+        if (config.port.empty()) {
+            throw std::runtime_error("Config error: port is empty");
+        }
+
+        if (config.symbol.empty()) {
+            throw std::runtime_error("Config error: symbol is empty");
+        }
+
+        if (config.streams.empty()) {
+            throw std::runtime_error("Config error: streams list is empty");
+        }
+
+        if (config.cert_file.empty()) {
+            throw std::runtime_error("Config error: cert_file is empty");
+        }
+
+        return config;
+    }
+};
 
 struct BestBidAsk {
     std::string symbol;
@@ -129,39 +211,30 @@ static void handle_message(const std::string& message) {
 }
 
 int main() {
-    const std::string host = "stream.binance.com";
-    const std::string port = "9443";
-
-    const std::string target =
-        "/stream?streams=btcusdt@bookTicker/btcusdt@trade";
-
     try {
+        const AppConfig config = AppConfig::load_from_file("config/config.json");
+
+        const std::string target = config.build_target();
+
+        std::cout << "Loaded config:\n"
+            << "  host:      " << config.host << '\n'
+            << "  port:      " << config.port << '\n'
+            << "  symbol:    " << config.symbol << '\n'
+            << "  target:    " << target << '\n'
+            << "  cert_file: " << config.cert_file << '\n';
+
         net::io_context ioc;
 
         ssl::context ctx{ ssl::context::tlsv12_client };
-
         ctx.set_verify_mode(ssl::verify_peer);
-
-        /*
-         * On Windows, OpenSSL from vcpkg often does not automatically use
-         * the system certificate store. Therefore we explicitly load CA bundle.
-         *
-         * By default, the app expects cacert.pem in the current working directory.
-         * You can override it with SSL_CERT_FILE environment variable.
-         */
-        const char* cert_file_env = std::getenv("SSL_CERT_FILE");
-        const std::string cert_file = cert_file_env != nullptr
-            ? std::string(cert_file_env)
-            : std::string("cacert.pem");
-
-        ctx.load_verify_file(cert_file);
+        ctx.load_verify_file(config.cert_file);
 
         tcp::resolver resolver{ ioc };
         websocket::stream<beast::ssl_stream<tcp::socket>> ws{ ioc, ctx };
 
         if (!SSL_set_tlsext_host_name(
             ws.next_layer().native_handle(),
-            host.c_str()
+            config.host.c_str()
         )) {
             beast::error_code ec{
                 static_cast<int>(::ERR_get_error()),
@@ -171,7 +244,7 @@ int main() {
             throw beast::system_error{ ec };
         }
 
-        const auto results = resolver.resolve(host, port);
+        const auto results = resolver.resolve(config.host, config.port);
 
         net::connect(
             beast::get_lowest_layer(ws),
@@ -198,12 +271,12 @@ int main() {
             )
         );
 
-        ws.handshake(host + ":" + port, target);
+        ws.handshake(config.host + ":" + config.port, target);
 
         std::cout << "Connected to wss://"
-            << host
+            << config.host
             << ":"
-            << port
+            << config.port
             << target
             << '\n';
 

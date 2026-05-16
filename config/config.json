@@ -1,0 +1,10 @@
+{
+  "host": "stream.binance.com",
+  "port": "9443",
+  "symbol": "btcusdt",
+  "streams": [
+    "bookTicker",
+    "trade"
+  ],
+  "cert_file": "cacert.pem"
+}
