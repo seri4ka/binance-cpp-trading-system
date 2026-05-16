@@ -6,5 +6,6 @@
     "bookTicker",
     "trade"
   ],
-  "cert_file": "cacert.pem"
+  "cert_file": "cacert.pem",
+  "raw_recording_path": "data/recordings/raw_events.jsonl"
 }

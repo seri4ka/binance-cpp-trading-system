@@ -1,3 +1,7 @@
+#include "market_data/MarketDataEvent.hpp"
+#include "market_data/MarketDataParser.hpp"
+#include "storage/JsonlWriter.hpp"
+
 #include <boost/asio/connect.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ssl/stream.hpp>
@@ -10,6 +14,7 @@
 #include <nlohmann/json.hpp>
 #include <openssl/err.h>
 
+#include <chrono>
 #include <cstdlib>
 #include <exception>
 #include <fstream>
@@ -18,6 +23,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <variant>
 
 namespace beast = boost::beast;
 namespace websocket = beast::websocket;
@@ -33,6 +39,7 @@ struct AppConfig {
     std::string symbol = "btcusdt";
     std::vector<std::string> streams = { "bookTicker", "trade" };
     std::string cert_file = "cacert.pem";
+    std::string raw_recording_path = "data/recordings/raw_events.jsonl";
 
     [[nodiscard]] std::string build_target() const {
         std::ostringstream oss;
@@ -82,6 +89,10 @@ struct AppConfig {
             config.cert_file = root.at("cert_file").get<std::string>();
         }
 
+        if (root.contains("raw_recording_path")) {
+            config.raw_recording_path = root.at("raw_recording_path").get<std::string>();
+        }
+
         if (config.host.empty()) {
             throw std::runtime_error("Config error: host is empty");
         }
@@ -102,51 +113,25 @@ struct AppConfig {
             throw std::runtime_error("Config error: cert_file is empty");
         }
 
+        if (config.raw_recording_path.empty()) {
+            throw std::runtime_error("Config error: raw_recording_path is empty");
+        }
+
         return config;
     }
 };
 
-struct BestBidAsk {
-    std::string symbol;
+static long long now_ms() {
+    const auto now = std::chrono::system_clock::now();
 
-    double bid_price = 0.0;
-    double bid_qty = 0.0;
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()
+    );
 
-    double ask_price = 0.0;
-    double ask_qty = 0.0;
-
-    [[nodiscard]] double mid_price() const {
-        return (bid_price + ask_price) / 2.0;
-    }
-
-    [[nodiscard]] double spread_bps() const {
-        const double mid = mid_price();
-
-        if (mid <= 0.0) {
-            return 0.0;
-        }
-
-        return (ask_price - bid_price) / mid * 10000.0;
-    }
-};
-
-static double to_double(const json& value) {
-    if (value.is_string()) {
-        return std::stod(value.get<std::string>());
-    }
-
-    return value.get<double>();
+    return ms.count();
 }
 
-static void handle_book_ticker(const json& data) {
-    BestBidAsk bba;
-
-    bba.symbol = data.at("s").get<std::string>();
-    bba.bid_price = to_double(data.at("b"));
-    bba.bid_qty = to_double(data.at("B"));
-    bba.ask_price = to_double(data.at("a"));
-    bba.ask_qty = to_double(data.at("A"));
-
+static void print_book_ticker(const BestBidAsk& bba) {
     std::cout << std::fixed << std::setprecision(8)
         << "[BOOK] "
         << bba.symbol
@@ -157,57 +142,35 @@ static void handle_book_ticker(const json& data) {
         << '\n';
 }
 
-static void handle_trade(const json& data) {
-    const auto symbol = data.at("s").get<std::string>();
-    const auto trade_id = data.at("t").get<long long>();
-    const auto price = to_double(data.at("p"));
-    const auto qty = to_double(data.at("q"));
-    const auto trade_time = data.at("T").get<long long>();
-    const auto buyer_is_maker = data.at("m").get<bool>();
-
+static void print_trade(const Trade& trade) {
     std::cout << std::fixed << std::setprecision(8)
         << "[TRADE] "
-        << symbol
-        << " id=" << trade_id
-        << " price=" << price
-        << " qty=" << qty
-        << " buyer_is_maker=" << std::boolalpha << buyer_is_maker
-        << " trade_time_ms=" << trade_time
+        << trade.symbol
+        << " id=" << trade.trade_id
+        << " price=" << trade.price
+        << " qty=" << trade.qty
+        << " buyer_is_maker=" << std::boolalpha << trade.buyer_is_maker
+        << " trade_time_ms=" << trade.trade_time_ms
         << '\n';
 }
 
-static void handle_message(const std::string& message) {
-    try {
-        const auto root = json::parse(message);
+static void handle_event(const MarketDataEvent& event) {
+    std::visit(
+        [](const auto& value) {
+            using T = std::decay_t<decltype(value)>;
 
-        const json& data = root.contains("data") ? root.at("data") : root;
-
-        if (!data.is_object()) {
-            return;
-        }
-
-        if (data.contains("e") && data.at("e").get<std::string>() == "trade") {
-            handle_trade(data);
-            return;
-        }
-
-        if (
-            data.contains("b") &&
-            data.contains("B") &&
-            data.contains("a") &&
-            data.contains("A")
-            ) {
-            handle_book_ticker(data);
-            return;
-        }
-
-        std::cout << "[OTHER] " << message << '\n';
-    }
-    catch (const std::exception& ex) {
-        std::cerr << "[PARSE_ERROR] " << ex.what()
-            << " raw=" << message
-            << '\n';
-    }
+            if constexpr (std::is_same_v<T, BestBidAsk>) {
+                print_book_ticker(value);
+            }
+            else if constexpr (std::is_same_v<T, Trade>) {
+                print_trade(value);
+            }
+            else if constexpr (std::is_same_v<T, UnknownMarketDataEvent>) {
+                std::cout << "[UNKNOWN] " << value.raw_message << '\n';
+            }
+        },
+        event
+    );
 }
 
 int main() {
@@ -217,11 +180,15 @@ int main() {
         const std::string target = config.build_target();
 
         std::cout << "Loaded config:\n"
-            << "  host:      " << config.host << '\n'
-            << "  port:      " << config.port << '\n'
-            << "  symbol:    " << config.symbol << '\n'
-            << "  target:    " << target << '\n'
-            << "  cert_file: " << config.cert_file << '\n';
+            << "  host:               " << config.host << '\n'
+            << "  port:               " << config.port << '\n'
+            << "  symbol:             " << config.symbol << '\n'
+            << "  target:             " << target << '\n'
+            << "  cert_file:          " << config.cert_file << '\n'
+            << "  raw_recording_path: " << config.raw_recording_path << '\n';
+
+        MarketDataParser parser;
+        JsonlWriter raw_writer(config.raw_recording_path);
 
         net::io_context ioc;
 
@@ -280,6 +247,10 @@ int main() {
             << target
             << '\n';
 
+        std::cout << "Recording raw events to: "
+            << config.raw_recording_path
+            << '\n';
+
         beast::flat_buffer buffer;
 
         while (true) {
@@ -288,7 +259,12 @@ int main() {
             const auto message = beast::buffers_to_string(buffer.data());
             buffer.consume(buffer.size());
 
-            handle_message(message);
+            const long long local_recv_time_ms = now_ms();
+
+            raw_writer.write_raw_message(local_recv_time_ms, message);
+
+            const MarketDataEvent event = parser.parse(message);
+            handle_event(event);
         }
     }
     catch (const std::exception& ex) {

@@ -12,6 +12,8 @@ find_package(nlohmann_json CONFIG REQUIRED)
 
 add_executable(binance_ws
     src/main.cpp
+    src/market_data/MarketDataParser.cpp
+    src/storage/JsonlWriter.cpp
 )
 
 target_compile_definitions(binance_ws

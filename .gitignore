@@ -42,7 +42,14 @@ logs/
 *.ilk
 *.obj
 *.exp
+*.pem
 
 # OS files
 .DS_Store
 Thumbs.db
+
+# Market data recordings
+data/*
+!data/recordings/
+!data/recordings/.gitkeep
+*.jsonl
