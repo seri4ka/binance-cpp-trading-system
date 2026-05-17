@@ -44,6 +44,7 @@ struct AppConfig {
     std::string book_ticker_csv_path = "data/recordings/book_ticker.csv";
     std::string trades_csv_path = "data/recordings/trades.csv";
 
+
     [[nodiscard]] std::string build_target() const {
         std::ostringstream oss;
 
@@ -142,6 +143,71 @@ struct AppConfig {
     }
 };
 
+enum class AppMode {
+    Live,
+    Record
+};
+
+struct CliOptions {
+    AppMode mode = AppMode::Live;
+    int duration_sec = 0;
+};
+
+static AppMode parse_mode(const std::string& value) {
+    if (value == "live") {
+        return AppMode::Live;
+    }
+
+    if (value == "record") {
+        return AppMode::Record;
+    }
+
+    throw std::runtime_error("Unknown mode: " + value);
+}
+
+static CliOptions parse_cli_options(int argc, char* argv[]) {
+    CliOptions options;
+
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+
+        if (arg == "--mode") {
+            if (i + 1 >= argc) {
+                throw std::runtime_error("Missing value for --mode");
+            }
+
+            options.mode = parse_mode(argv[++i]);
+        }
+        else if (arg == "--duration-sec") {
+            if (i + 1 >= argc) {
+                throw std::runtime_error("Missing value for --duration-sec");
+            }
+
+            options.duration_sec = std::stoi(argv[++i]);
+
+            if (options.duration_sec < 0) {
+                throw std::runtime_error("--duration-sec must be non-negative");
+            }
+        }
+        else {
+            throw std::runtime_error("Unknown argument: " + arg);
+        }
+    }
+
+    return options;
+}
+
+static std::string mode_to_string(AppMode mode) {
+    switch (mode) {
+    case AppMode::Live:
+        return "live";
+    case AppMode::Record:
+        return "record";
+    }
+
+    return "unknown";
+}
+
 static long long now_ms() {
     const auto now = std::chrono::system_clock::now();
 
@@ -200,8 +266,9 @@ static void handle_event(
     );
 }
 
-int main() {
+int main(int argc, char* argv[]) {
     try {
+        const CliOptions cli_options = parse_cli_options(argc, argv);
         const AppConfig config = AppConfig::load_from_file("config/config.json");
 
         const std::string target = config.build_target();
@@ -214,7 +281,10 @@ int main() {
             << "  cert_file:          " << config.cert_file << '\n'
             << "  raw_recording_path: " << config.raw_recording_path << '\n'
             << "  book_ticker_csv:   " << config.book_ticker_csv_path << '\n'
-            << "  trades_csv:        " << config.trades_csv_path << '\n';
+            << "  trades_csv:        " << config.trades_csv_path << '\n'
+            << "  mode:               " << mode_to_string(cli_options.mode) << '\n'
+            << "  duration_sec:       " << cli_options.duration_sec << '\n';
+
 
         MarketDataParser parser;
         CsvMarketDataWriter csv_writer{
