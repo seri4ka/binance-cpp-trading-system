@@ -7,5 +7,7 @@
     "trade"
   ],
   "cert_file": "cacert.pem",
-  "raw_recording_path": "data/recordings/raw_events.jsonl"
+  "raw_recording_path": "data/recordings/raw_events.jsonl",
+  "book_ticker_csv_path": "data/recordings/book_ticker.csv",
+  "trades_csv_path": "data/recordings/trades.csv"
 }

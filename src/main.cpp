@@ -1,6 +1,7 @@
 #include "market_data/MarketDataEvent.hpp"
 #include "market_data/MarketDataParser.hpp"
 #include "storage/JsonlWriter.hpp"
+#include "storage/CsvMarketDataWriter.hpp"
 
 #include <boost/asio/connect.hpp>
 #include <boost/asio/ip/tcp.hpp>
@@ -40,6 +41,8 @@ struct AppConfig {
     std::vector<std::string> streams = { "bookTicker", "trade" };
     std::string cert_file = "cacert.pem";
     std::string raw_recording_path = "data/recordings/raw_events.jsonl";
+    std::string book_ticker_csv_path = "data/recordings/book_ticker.csv";
+    std::string trades_csv_path = "data/recordings/trades.csv";
 
     [[nodiscard]] std::string build_target() const {
         std::ostringstream oss;
@@ -93,6 +96,16 @@ struct AppConfig {
             config.raw_recording_path = root.at("raw_recording_path").get<std::string>();
         }
 
+        if (root.contains("book_ticker_csv_path")) {
+            config.book_ticker_csv_path =
+                root.at("book_ticker_csv_path").get<std::string>();
+        }
+
+        if (root.contains("trades_csv_path")) {
+            config.trades_csv_path =
+                root.at("trades_csv_path").get<std::string>();
+        }
+
         if (config.host.empty()) {
             throw std::runtime_error("Config error: host is empty");
         }
@@ -115,6 +128,14 @@ struct AppConfig {
 
         if (config.raw_recording_path.empty()) {
             throw std::runtime_error("Config error: raw_recording_path is empty");
+        }
+
+        if (config.book_ticker_csv_path.empty()) {
+            throw std::runtime_error("Config error: book_ticker_csv_path is empty");
+        }
+
+        if (config.trades_csv_path.empty()) {
+            throw std::runtime_error("Config error: trades_csv_path is empty");
         }
 
         return config;
@@ -154,15 +175,21 @@ static void print_trade(const Trade& trade) {
         << '\n';
 }
 
-static void handle_event(const MarketDataEvent& event) {
+static void handle_event(
+    const MarketDataEvent& event,
+    long long local_recv_time_ms,
+    CsvMarketDataWriter& csv_writer
+) {
     std::visit(
-        [](const auto& value) {
+        [&](const auto& value) {
             using T = std::decay_t<decltype(value)>;
 
             if constexpr (std::is_same_v<T, BestBidAsk>) {
+                csv_writer.write_book_ticker(local_recv_time_ms, value);
                 print_book_ticker(value);
             }
             else if constexpr (std::is_same_v<T, Trade>) {
+                csv_writer.write_trade(local_recv_time_ms, value);
                 print_trade(value);
             }
             else if constexpr (std::is_same_v<T, UnknownMarketDataEvent>) {
@@ -185,9 +212,15 @@ int main() {
             << "  symbol:             " << config.symbol << '\n'
             << "  target:             " << target << '\n'
             << "  cert_file:          " << config.cert_file << '\n'
-            << "  raw_recording_path: " << config.raw_recording_path << '\n';
+            << "  raw_recording_path: " << config.raw_recording_path << '\n'
+            << "  book_ticker_csv:   " << config.book_ticker_csv_path << '\n'
+            << "  trades_csv:        " << config.trades_csv_path << '\n';
 
         MarketDataParser parser;
+        CsvMarketDataWriter csv_writer{
+            config.book_ticker_csv_path,
+            config.trades_csv_path
+        };
         JsonlWriter raw_writer(config.raw_recording_path);
 
         net::io_context ioc;
@@ -264,7 +297,7 @@ int main() {
             raw_writer.write_raw_message(local_recv_time_ms, message);
 
             const MarketDataEvent event = parser.parse(message);
-            handle_event(event);
+            handle_event(event, local_recv_time_ms, csv_writer);
         }
     }
     catch (const std::exception& ex) {

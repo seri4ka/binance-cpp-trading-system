@@ -14,6 +14,7 @@ add_executable(binance_ws
     src/main.cpp
     src/market_data/MarketDataParser.cpp
     src/storage/JsonlWriter.cpp
+    src/storage/CsvMarketDataWriter.cpp
 )
 
 target_compile_definitions(binance_ws
