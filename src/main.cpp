@@ -218,6 +218,27 @@ static long long now_ms() {
     return ms.count();
 }
 
+static bool should_stop(
+    const CliOptions& cli_options,
+    const std::chrono::steady_clock::time_point& start_time
+) {
+    if (cli_options.mode != AppMode::Record) {
+        return false;
+    }
+
+    if (cli_options.duration_sec <= 0) {
+        return false;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+
+    const auto elapsed_sec = std::chrono::duration_cast<std::chrono::seconds>(
+        now - start_time
+    ).count();
+
+    return elapsed_sec >= cli_options.duration_sec;
+}
+
 static void print_book_ticker(const BestBidAsk& bba) {
     std::cout << std::fixed << std::setprecision(8)
         << "[BOOK] "
@@ -356,7 +377,14 @@ int main(int argc, char* argv[]) {
 
         beast::flat_buffer buffer;
 
+        const auto start_time = std::chrono::steady_clock::now();
+
         while (true) {
+            if (should_stop(cli_options, start_time)) {
+                std::cout << "Duration limit reached. Stopping.\n";
+                break;
+            }
+
             ws.read(buffer);
 
             const auto message = beast::buffers_to_string(buffer.data());
@@ -368,6 +396,15 @@ int main(int argc, char* argv[]) {
 
             const MarketDataEvent event = parser.parse(message);
             handle_event(event, local_recv_time_ms, csv_writer);
+        }
+
+        beast::error_code close_ec;
+        ws.close(websocket::close_code::normal, close_ec);
+
+        if (close_ec) {
+            std::cerr << "WebSocket close warning: "
+                << close_ec.message()
+                << '\n';
         }
     }
     catch (const std::exception& ex) {
