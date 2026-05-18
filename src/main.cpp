@@ -25,6 +25,7 @@
 #include <string>
 #include <vector>
 #include <variant>
+#include <memory>
 
 namespace beast = boost::beast;
 namespace websocket = beast::websocket;
@@ -265,18 +266,24 @@ static void print_trade(const Trade& trade) {
 static void handle_event(
     const MarketDataEvent& event,
     long long local_recv_time_ms,
-    CsvMarketDataWriter& csv_writer
+    CsvMarketDataWriter* csv_writer
 ) {
     std::visit(
         [&](const auto& value) {
             using T = std::decay_t<decltype(value)>;
 
             if constexpr (std::is_same_v<T, BestBidAsk>) {
-                csv_writer.write_book_ticker(local_recv_time_ms, value);
+                if (csv_writer != nullptr) {
+                    csv_writer->write_book_ticker(local_recv_time_ms, value);
+                }
+
                 print_book_ticker(value);
             }
             else if constexpr (std::is_same_v<T, Trade>) {
-                csv_writer.write_trade(local_recv_time_ms, value);
+                if (csv_writer != nullptr) {
+                    csv_writer->write_trade(local_recv_time_ms, value);
+                }
+
                 print_trade(value);
             }
             else if constexpr (std::is_same_v<T, UnknownMarketDataEvent>) {
@@ -308,11 +315,35 @@ int main(int argc, char* argv[]) {
 
 
         MarketDataParser parser;
-        CsvMarketDataWriter csv_writer{
-            config.book_ticker_csv_path,
-            config.trades_csv_path
-        };
-        JsonlWriter raw_writer(config.raw_recording_path);
+
+        std::unique_ptr<JsonlWriter> raw_writer;
+        std::unique_ptr<CsvMarketDataWriter> csv_writer;
+
+        if (cli_options.mode == AppMode::Record) {
+            raw_writer = std::make_unique<JsonlWriter>(
+                config.raw_recording_path
+            );
+
+            csv_writer = std::make_unique<CsvMarketDataWriter>(
+                config.book_ticker_csv_path,
+                config.trades_csv_path
+            );
+
+            std::cout << "Recording raw events to: "
+                << config.raw_recording_path
+                << '\n';
+
+            std::cout << "Recording book ticker CSV to: "
+                << config.book_ticker_csv_path
+                << '\n';
+
+            std::cout << "Recording trades CSV to: "
+                << config.trades_csv_path
+                << '\n';
+        }
+        else {
+            std::cout << "Live mode: file recording is disabled.\n";
+        }
 
         net::io_context ioc;
 
@@ -392,10 +423,12 @@ int main(int argc, char* argv[]) {
 
             const long long local_recv_time_ms = now_ms();
 
-            raw_writer.write_raw_message(local_recv_time_ms, message);
+            if (raw_writer != nullptr) {
+                raw_writer->write_raw_message(local_recv_time_ms, message);
+            }
 
             const MarketDataEvent event = parser.parse(message);
-            handle_event(event, local_recv_time_ms, csv_writer);
+            handle_event(event, local_recv_time_ms, csv_writer.get());
         }
 
         beast::error_code close_ec;
