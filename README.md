@@ -44,7 +44,7 @@ BestBidAsk / Trade
 ## Build
 
 ```PowerShell
-cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=C:\Users\ciell\Desktop\vcpkg\scripts\buildsystems\vcpkg.cmake -A x64
+Example will be updated soon
 cmake --build build --config Release
 ```
 
